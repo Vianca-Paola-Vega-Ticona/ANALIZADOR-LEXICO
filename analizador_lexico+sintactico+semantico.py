@@ -817,173 +817,1110 @@ def analizar_sintactico(lista_tokens, lista_lineas, lista_lexemas):
     except SystemExit:
         return False
     
+# ================================================================================
+# ANALIZADOR SEMÁNTICO
+# ================================================================================
+# Función: Interpretar el significado de las sentencias válidas del programa
+# Método: Transformación de expresiones a notación prefija y generación de cuádruplos
+# Cada operación es representada mediante una estructura de cuatro campos
+# que facilita la construcción de código intermedio para etapas posteriores
+# ================================================================================
+
+def analizar_semantico(tokens, lineas, lexemas):
+    """
+    Genera cuádruplos utilizando SOLO tokens numéricos
+    Retorna: (cuadruplos, tabla_identificadores_lexemas, tabla_identificadores_indices)
+    """
+    pos = 0
+    cuadruplos = []
+    temp_counter = 1
+    
+    # Tabla de identificadores usando listas paralelas
+    tabla_ids_lexemas = []  # Lista de lexemas
+    tabla_ids_indices = []  # Lista de índices correspondientes
+    
+    # UTILIDADES 
+    
+    def nueva_temp():
+        """Genera un nuevo temporal T1, T2, ..."""
+        nonlocal temp_counter
+        t = "T" + str(temp_counter)
+        temp_counter += 1
+        return t
+    
+    def registrar_id(lexema):
+        """Registra un identificador y retorna su representación [500,n]"""
+        # Buscar si ya existe
+        encontrado = False
+        indice = 0
+        for i in range(len(tabla_ids_lexemas)):
+            if tabla_ids_lexemas[i] == lexema:
+                encontrado = True
+                indice = tabla_ids_indices[i]
+                break
+        
+        if not encontrado:
+            # Agregar nuevo identificador
+            nuevo_indice = len(tabla_ids_lexemas) + 1
+            tabla_ids_lexemas.append(lexema)
+            tabla_ids_indices.append(nuevo_indice)
+            indice = nuevo_indice
+        
+        return "[500," + str(indice) + "]"
+    
+    def token_to_operador(tok):
+        """Convierte token numérico a símbolo de operador"""
+        if tok == 100:
+            return "100"  # =
+        elif tok == 103:
+            return "103"  # -
+        elif tok == 104:
+            return "104"  # +
+        elif tok == 106:
+            return "106"  # *
+        elif tok == 107:
+            return "107"  # /
+        elif tok == 120:
+            return "120"  # ==
+        elif tok == 121:
+            return "121"  # !=
+        elif tok == 122:
+            return "122"  # 
+        elif tok == 123:
+            return "123"  # <=
+        elif tok == 124:
+            return "124"  # >
+        elif tok == 125:
+            return "125"  # >=
+        elif tok == 17:
+            return "17"   # no (negación)
+        elif tok == 18:
+            return "18"   # y (AND)
+        elif tok == 19:
+            return "19"   # o (OR)
+        else:
+            return str(tok)
+    
+    def es_operador(tok):
+        """Verifica si el token es un operador aritmético"""
+        return tok == 103 or tok == 104 or tok == 106 or tok == 107
+    
+    def prioridad(tok):
+        """Retorna la prioridad del operador"""
+        if tok == 104 or tok == 103:  # +, -
+            return 1
+        if tok == 106 or tok == 107:  # *, /
+            return 2
+        return 0
+    
+    def es_menos_unario(tokens_expr, pos_menos):
+        """Determina si un '-' es resta o binario"""
+        # Es unario si está al inicio o después de operador/paréntesis izquierdo
+        if pos_menos == 0:
+            return True
+        tok_anterior = tokens_expr[pos_menos - 1]
+        return tok_anterior in [101, 104, 103, 106, 107]  # (, +, -, *, /
+    
+    def infijo_a_prefijo(tokens_expr, lexemas_expr):
+        """
+        Convierte expresión infija a prefija
+        Maneja correctamente el menos unario
+        Retorna lista de (token, lexema, es_unario)
+        """
+        pila = []
+        salida = []
+        
+        # Marcar operadores unarios
+        tokens_marcados = []
+        for i in range(len(tokens_expr)):
+            tok = tokens_expr[i]
+            lex = lexemas_expr[i]
+            es_unario = False
+            
+            if tok == 103:  # -
+                if es_menos_unario(tokens_expr, i):
+                    es_unario = True
+            
+            tokens_marcados.append((tok, lex, es_unario))
+        
+        # Invertir la expresión
+        expr_rev = []
+        for i in range(len(tokens_marcados) - 1, -1, -1):
+            expr_rev.append(tokens_marcados[i])
+        
+        for tok, lex, es_unario in expr_rev:
+            if tok == 102:  # )
+                pila.append((tok, lex, es_unario))
+            
+            elif tok == 101:  # (
+                while len(pila) > 0 and pila[len(pila)-1][0] != 102:
+                    salida.append(pila.pop())
+                if len(pila) > 0:
+                    pila.pop()
+            
+            elif es_operador(tok) and not es_unario:
+                while len(pila) > 0 and prioridad(tok) < prioridad(pila[len(pila)-1][0]):
+                    salida.append(pila.pop())
+                pila.append((tok, lex, es_unario))
+            
+            elif es_unario:
+                # Menos unario tiene alta precedencia
+                pila.append((tok, lex, es_unario))
+            
+            else:
+                salida.append((tok, lex, es_unario))
+        
+        while len(pila) > 0:
+            salida.append(pila.pop())
+        
+        # Invertir salida
+        resultado = []
+        for i in range(len(salida) - 1, -1, -1):
+            resultado.append(salida[i])
+        
+        return resultado
+    
+    def evaluar_prefijo(prefijo):
+        """
+        Evalúa expresión en prefijo y genera cuádruplos
+        Retorna el resultado final (temporal o identificador)
+        """
+        pila = []
+        
+        # Procesar en orden inverso
+        for i in range(len(prefijo) - 1, -1, -1):
+            tok, lex, es_unario = prefijo[i]
+            
+            if not es_operador(tok) or es_unario:
+                if es_unario:
+                    # Menos unario: generar cuádruple especial
+                    operando = pila.pop()
+                    t = nueva_temp()
+                    cuadruplos.append(("103u", operando, "", t))  # 103u = menos unario
+                    pila.append(t)
+                else:
+                    # Operando: número o identificador
+                    if tok == 500:  # identificador
+                        pila.append(registrar_id(lex))
+                    elif tok == 700:  # número
+                        pila.append(lex)
+                    else:
+                        pila.append(lex)
+            else:
+                # Operador binario
+                op1 = pila.pop()
+                op2 = pila.pop()
+                t = nueva_temp()
+                op_sym = token_to_operador(tok)
+                cuadruplos.append((op_sym, op1, op2, t))
+                pila.append(t)
+        
+        if len(pila) > 0:
+            return pila.pop()
+        else:
+            return ""
+    
+    def procesar_condicion(cond_tokens, cond_lexemas):
+        """
+        Procesa una condición y genera cuádruplos
+        Soporta operadores lógicos (y, o) y negación (no)
+        """
+        # Buscar operador lógico de menor precedencia (o tiene menor que y)
+        op_logico_pos = -1
+        op_logico_tok = -1
+        
+        # Buscar 'o' primero (menor precedencia)
+        nivel_parentesis = 0
+        for i in range(len(cond_tokens)):
+            if cond_tokens[i] == 101:
+                nivel_parentesis += 1
+            elif cond_tokens[i] == 102:
+                nivel_parentesis -= 1
+            elif nivel_parentesis == 0 and cond_tokens[i] == 19:  # o
+                op_logico_pos = i
+                op_logico_tok = 19
+                break
+        
+        # Si no hay 'o', buscar 'y'
+        if op_logico_pos == -1:
+            nivel_parentesis = 0
+            for i in range(len(cond_tokens)):
+                if cond_tokens[i] == 101:
+                    nivel_parentesis += 1
+                elif cond_tokens[i] == 102:
+                    nivel_parentesis -= 1
+                elif nivel_parentesis == 0 and cond_tokens[i] == 18:  # y
+                    op_logico_pos = i
+                    op_logico_tok = 18
+                    break
+        
+        # Si hay operador lógico, dividir y procesar recursivamente
+        if op_logico_pos != -1:
+            # Dividir en izquierda y derecha
+            izq_tokens = []
+            izq_lexemas = []
+            for i in range(op_logico_pos):
+                izq_tokens.append(cond_tokens[i])
+                izq_lexemas.append(cond_lexemas[i])
+            
+            der_tokens = []
+            der_lexemas = []
+            for i in range(op_logico_pos + 1, len(cond_tokens)):
+                der_tokens.append(cond_tokens[i])
+                der_lexemas.append(cond_lexemas[i])
+            
+            # Procesar ambos lados recursivamente
+            resultado_izq = procesar_condicion(izq_tokens, izq_lexemas)
+            resultado_der = procesar_condicion(der_tokens, der_lexemas)
+            
+            # Generar cuádruple para operación lógica
+            t = nueva_temp()
+            op_sym = token_to_operador(op_logico_tok)
+            cuadruplos.append((op_sym, resultado_izq, resultado_der, t))
+            return t
+        
+        # Verificar si empieza con 'no' (negación)
+        if len(cond_tokens) > 0 and cond_tokens[0] == 17:  # no
+            # Procesar el resto de la condición
+            resto_tokens = []
+            resto_lexemas = []
+            for i in range(1, len(cond_tokens)):
+                resto_tokens.append(cond_tokens[i])
+                resto_lexemas.append(cond_lexemas[i])
+            
+            resultado_resto = procesar_condicion(resto_tokens, resto_lexemas)
+            
+            # Generar cuádruple de negación
+            t = nueva_temp()
+            cuadruplos.append(("17", resultado_resto, "", t))  # 17 = no
+            return t
+        
+        # Buscar operador relacional
+        ops_rel = [120, 121, 122, 123, 124, 125]  # ==, !=, <, <=, >, >=
+        
+        op_pos = -1
+        for i in range(len(cond_tokens)):
+            tok = cond_tokens[i]
+            for op_rel in ops_rel:
+                if tok == op_rel:
+                    op_pos = i
+                    break
+            if op_pos != -1:
+                break
+        
+        if op_pos == -1:
+            # Sin operador relacional, solo expresión
+            if len(cond_tokens) == 1:
+                if cond_tokens[0] == 500:
+                    return registrar_id(cond_lexemas[0])
+                return cond_lexemas[0]
+            else:
+                prefijo = infijo_a_prefijo(cond_tokens, cond_lexemas)
+                return evaluar_prefijo(prefijo)
+        
+        # Dividir en izquierda y derecha
+        izq_tokens = []
+        izq_lexemas = []
+        for i in range(op_pos):
+            izq_tokens.append(cond_tokens[i])
+            izq_lexemas.append(cond_lexemas[i])
+        
+        der_tokens = []
+        der_lexemas = []
+        for i in range(op_pos + 1, len(cond_tokens)):
+            der_tokens.append(cond_tokens[i])
+            der_lexemas.append(cond_lexemas[i])
+        
+        # Evaluar lado izquierdo
+        if len(izq_tokens) == 1:
+            if izq_tokens[0] == 500:
+                op1 = registrar_id(izq_lexemas[0])
+            else:
+                op1 = izq_lexemas[0]
+        else:
+            prefijo_izq = infijo_a_prefijo(izq_tokens, izq_lexemas)
+            op1 = evaluar_prefijo(prefijo_izq)
+        
+        # Evaluar lado derecho
+        if len(der_tokens) == 1:
+            if der_tokens[0] == 500:
+                op2 = registrar_id(der_lexemas[0])
+            else:
+                op2 = der_lexemas[0]
+        else:
+            prefijo_der = infijo_a_prefijo(der_tokens, der_lexemas)
+            op2 = evaluar_prefijo(prefijo_der)
+        
+        # Generar cuádruple de comparación
+        t = nueva_temp()
+        op_sym = token_to_operador(cond_tokens[op_pos])
+        cuadruplos.append((op_sym, op1, op2, t))
+        
+        return t
+    
+    # PROCESAMIENTO PRINCIPAL
+    
+    while pos < len(tokens):
+        tok = tokens[pos]
+        lex = lexemas[pos]
+        
+        # DECLARACIÓN: entero 
+        if tok == 3:  # entero
+            cuadruplos.append((3, "", "", ""))
+            pos += 1
+            
+            # Procesar lista de identificadores
+            while pos < len(tokens) and tokens[pos] != 105:  # hasta ;
+                if tokens[pos] == 500:  # identificador
+                    id_repr = registrar_id(lexemas[pos])
+                    cuadruplos.append(("parametro", id_repr, "", ""))
+                    pos += 1
+                    
+                    # Si hay inicialización (=)
+                    if pos < len(tokens) and tokens[pos] == 100:
+                        pos += 1  # saltar =
+                        
+                        # Capturar expresión hasta , o ;
+                        expr_tokens = []
+                        expr_lexemas = []
+                        while pos < len(tokens) and tokens[pos] != 108 and tokens[pos] != 105:
+                            expr_tokens.append(tokens[pos])
+                            expr_lexemas.append(lexemas[pos])
+                            pos += 1
+                        
+                        # Generar cuádruplos para la expresión
+                        if len(expr_tokens) > 0:
+                            prefijo = infijo_a_prefijo(expr_tokens, expr_lexemas)
+                            resultado = evaluar_prefijo(prefijo)
+                            cuadruplos.append(("100", resultado, "", id_repr))
+                
+                elif tokens[pos] == 108:  # coma
+                    pos += 1
+                else:
+                    pos += 1
+            
+            if pos < len(tokens) and tokens[pos] == 105:  # ;
+                pos += 1
+        
+        # -------- ASIGNACIÓN: id = expr; --------
+        elif tok == 500:
+            id_repr = registrar_id(lex)
+            pos += 1
+            
+            if pos < len(tokens) and tokens[pos] == 100:  # =
+                pos += 1
+                
+                # Capturar expresión hasta ;
+                expr_tokens = []
+                expr_lexemas = []
+                while pos < len(tokens) and tokens[pos] != 105:
+                    expr_tokens.append(tokens[pos])
+                    expr_lexemas.append(lexemas[pos])
+                    pos += 1
+                
+                # Generar cuádruplos
+                prefijo = infijo_a_prefijo(expr_tokens, expr_lexemas)
+                resultado = evaluar_prefijo(prefijo)
+                cuadruplos.append(("100", resultado, "", id_repr))
+                
+                if pos < len(tokens) and tokens[pos] == 105:
+                    pos += 1
+        
+        # -------- INGRESA: ingresa(id); --------
+        elif tok == 5:  # ingresa
+            pos += 1
+            if pos < len(tokens) and tokens[pos] == 101:  # (
+                pos += 1
+                if pos < len(tokens) and tokens[pos] == 500:  # identificador
+                    id_repr = registrar_id(lexemas[pos])
+                    cuadruplos.append((5, "", "", ""))
+                    cuadruplos.append(("parametro", id_repr, "", ""))
+                    pos += 1
+                    if pos < len(tokens) and tokens[pos] == 102:  # )
+                        pos += 1
+                    if pos < len(tokens) and tokens[pos] == 105:  # ;
+                        pos += 1
+        
+        # -------- IMPRIMIR: imprimir(expr, ...); --------
+        elif tok == 4:  # imprimir
+            cuadruplos.append((4, "", "", ""))
+            pos += 1
+            
+            if pos < len(tokens) and tokens[pos] == 101:  # (
+                pos += 1
+                
+                while pos < len(tokens) and tokens[pos] != 102:  # hasta )
+                    # Capturar expresión hasta , o )
+                    expr_tokens = []
+                    expr_lexemas = []
+                    
+                    while pos < len(tokens) and tokens[pos] != 108 and tokens[pos] != 102:
+                        expr_tokens.append(tokens[pos])
+                        expr_lexemas.append(lexemas[pos])
+                        pos += 1
+                    
+                    # Evaluar expresión
+                    if len(expr_tokens) > 0:
+                        if len(expr_tokens) == 1:
+                            # Expresión simple
+                            if expr_tokens[0] == 500:
+                                resultado = registrar_id(expr_lexemas[0])
+                            else:
+                                resultado = expr_lexemas[0]
+                        else:
+                            # Expresión compleja
+                            prefijo = infijo_a_prefijo(expr_tokens, expr_lexemas)
+                            resultado = evaluar_prefijo(prefijo)
+                        
+                        cuadruplos.append(("parametro", resultado, "", ""))
+                    
+                    if pos < len(tokens) and tokens[pos] == 108:  # ,
+                        pos += 1
+                
+                if pos < len(tokens) and tokens[pos] == 102:  # )
+                    pos += 1
+                if pos < len(tokens) and tokens[pos] == 105:  # ;
+                    pos += 1
+        
+        # -------- MIENTRAS_QUE --------
+        elif tok == 10:  # mientras_que
+            cuadruplos.append((10, "", "", ""))
+            pos += 1
+            
+            if pos < len(tokens) and tokens[pos] == 101:  # (
+                pos += 1
+                
+                # Capturar condición hasta )
+                cond_tokens = []
+                cond_lexemas = []
+                nivel_parentesis = 1
+                
+                while pos < len(tokens) and nivel_parentesis > 0:
+                    if tokens[pos] == 101:
+                        nivel_parentesis += 1
+                    elif tokens[pos] == 102:
+                        nivel_parentesis -= 1
+                        if nivel_parentesis == 0:
+                            break
+                    cond_tokens.append(tokens[pos])
+                    cond_lexemas.append(lexemas[pos])
+                    pos += 1
+                
+                # Procesar condición
+                resultado_cond = procesar_condicion(cond_tokens, cond_lexemas)
+                cuadruplos.append(("parametro", resultado_cond, "", ""))
+                
+                if pos < len(tokens) and tokens[pos] == 102:  # )
+                    pos += 1
+                if pos < len(tokens) and tokens[pos] == 11:  # hacer
+                    pos += 1
+            
+            # NO SALTAR - continuar procesando
+            continue
+        
+        # -------- FIN_MIENTRAS_QUE --------
+        elif tok == 12:  # fin_mientras_que
+            cuadruplos.append((12, "", "", ""))
+            pos += 1
+            if pos < len(tokens) and tokens[pos] == 105:  # ;
+                pos += 1
+        
+        # -------- REPETIR --------
+        elif tok == 13:  # repetir
+            cuadruplos.append((13, "", "", ""))
+            pos += 1
+            # NO SALTAR - continuar procesando
+            continue
+        
+        # -------- HASTA_QUE --------
+        elif tok == 14:  # hasta_que
+            pos += 1
+            
+            if pos < len(tokens) and tokens[pos] == 101:  # (
+                pos += 1
+                
+                # Capturar condición
+                cond_tokens = []
+                cond_lexemas = []
+                nivel_parentesis = 1
+                
+                while pos < len(tokens) and nivel_parentesis > 0:
+                    if tokens[pos] == 101:
+                        nivel_parentesis += 1
+                    elif tokens[pos] == 102:
+                        nivel_parentesis -= 1
+                        if nivel_parentesis == 0:
+                            break
+                    cond_tokens.append(tokens[pos])
+                    cond_lexemas.append(lexemas[pos])
+                    pos += 1
+                
+                # Procesar condición
+                resultado_cond = procesar_condicion(cond_tokens, cond_lexemas)
+                cuadruplos.append(("parametro", resultado_cond, "", ""))
+                cuadruplos.append((14, "", "", ""))
+                
+                if pos < len(tokens) and tokens[pos] == 102:  # )
+                    pos += 1
+                if pos < len(tokens) and tokens[pos] == 105:  # ;
+                    pos += 1
+        
+        # -------- PARA --------
+        elif tok == 15:  # para
+            cuadruplos.append((15, "", "", ""))
+            pos += 1
+            
+            if pos < len(tokens) and tokens[pos] == 101:  # (
+                pos += 1
+                
+                # INICIALIZACIÓN
+                # Puede ser: entero i = 0  o  i = 0
+                tiene_entero = False
+                if pos < len(tokens) and tokens[pos] == 3:  # entero (opcional)
+                    tiene_entero = True
+                    cuadruplos.append((3, "", "", ""))
+                    pos += 1
+                
+                if pos < len(tokens) and tokens[pos] == 500:  # identificador
+                    id_repr = registrar_id(lexemas[pos])
+                    if tiene_entero:
+                        cuadruplos.append(("parametro", id_repr, "", ""))
+                    pos += 1
+                    
+                    if pos < len(tokens) and tokens[pos] == 100:  # =
+                        pos += 1
+                        
+                        # Capturar valor inicial
+                        expr_tokens = []
+                        expr_lexemas = []
+                        while pos < len(tokens) and tokens[pos] != 105:  # hasta ;
+                            expr_tokens.append(tokens[pos])
+                            expr_lexemas.append(lexemas[pos])
+                            pos += 1
+                        
+                        if len(expr_tokens) > 0:
+                            if len(expr_tokens) == 1:
+                                if expr_tokens[0] == 500:
+                                    resultado = registrar_id(expr_lexemas[0])
+                                else:
+                                    resultado = expr_lexemas[0]
+                            else:
+                                prefijo = infijo_a_prefijo(expr_tokens, expr_lexemas)
+                                resultado = evaluar_prefijo(prefijo)
+                            cuadruplos.append(("100", resultado, "", id_repr))
+                        
+                        if pos < len(tokens) and tokens[pos] == 105:  # ;
+                            pos += 1
+                
+                # CONDICIÓN
+                cond_tokens = []
+                cond_lexemas = []
+                while pos < len(tokens) and tokens[pos] != 105:  # hasta ;
+                    cond_tokens.append(tokens[pos])
+                    cond_lexemas.append(lexemas[pos])
+                    pos += 1
+                
+                resultado_cond = procesar_condicion(cond_tokens, cond_lexemas)
+                cuadruplos.append(("parametro", resultado_cond, "", ""))
+                
+                if pos < len(tokens) and tokens[pos] == 105:  # ;
+                    pos += 1
+                
+                # ACTUALIZACIÓN - AHORA SÍ SE PROCESA
+                act_tokens = []
+                act_lexemas = []
+                while pos < len(tokens) and tokens[pos] != 102:  # hasta )
+                    act_tokens.append(tokens[pos])
+                    act_lexemas.append(lexemas[pos])
+                    pos += 1
+                
+                # Guardar la actualización para procesarla al final del bloque
+                # Por ahora, la guardamos en un cuádruple especial
+                if len(act_tokens) > 0:
+                    # Buscar el identificador y la expresión
+                    if act_tokens[0] == 500 and len(act_tokens) > 2 and act_tokens[1] == 100:
+                        id_act = registrar_id(act_lexemas[0])
+                        expr_act_tokens = []
+                        expr_act_lexemas = []
+                        for i in range(2, len(act_tokens)):
+                            expr_act_tokens.append(act_tokens[i])
+                            expr_act_lexemas.append(act_lexemas[i])
+                        
+                        if len(expr_act_tokens) == 1:
+                            if expr_act_tokens[0] == 500:
+                                resultado_act = registrar_id(expr_act_lexemas[0])
+                            else:
+                                resultado_act = expr_act_lexemas[0]
+                        else:
+                            prefijo_act = infijo_a_prefijo(expr_act_tokens, expr_act_lexemas)
+                            resultado_act = evaluar_prefijo(prefijo_act)
+                        
+                        # Guardar actualización como cuádruple especial
+                        cuadruplos.append(("100", resultado_act, "", id_act))
+                
+                if pos < len(tokens) and tokens[pos] == 102:  # )
+                    pos += 1
+                if pos < len(tokens) and tokens[pos] == 11:  # hacer
+                    pos += 1
+            
+            # NO SALTAR - continuar procesando
+            continue
+        
+        # -------- FIN_PARA --------
+        elif tok == 16:  # fin_para
+            cuadruplos.append((16, "", "", ""))
+            pos += 1
+            if pos < len(tokens) and tokens[pos] == 105:  # ;
+                pos += 1
+        
+        # -------- SI --------
+        elif tok == 6:  # si
+            cuadruplos.append((6, "", "", ""))
+            pos += 1
+            
+            if pos < len(tokens) and tokens[pos] == 101:  # (
+                pos += 1
+                
+                # Capturar condición
+                cond_tokens = []
+                cond_lexemas = []
+                nivel_parentesis = 1
+                
+                while pos < len(tokens) and nivel_parentesis > 0:
+                    if tokens[pos] == 101:
+                        nivel_parentesis += 1
+                    elif tokens[pos] == 102:
+                        nivel_parentesis -= 1
+                        if nivel_parentesis == 0:
+                            break
+                    cond_tokens.append(tokens[pos])
+                    cond_lexemas.append(lexemas[pos])
+                    pos += 1
+                
+                # Procesar condición
+                resultado_cond = procesar_condicion(cond_tokens, cond_lexemas)
+                cuadruplos.append(("parametro", resultado_cond, "", ""))
+                
+                if pos < len(tokens) and tokens[pos] == 102:  # )
+                    pos += 1
+                if pos < len(tokens) and tokens[pos] == 7:  # entonces
+                    pos += 1
+            
+            # NO SALTAR - continuar procesando
+            continue
+        
+        # -------- SINO --------
+        elif tok == 8:  # sino
+            cuadruplos.append((8, "", "", ""))
+            pos += 1
+        
+        # -------- FIN_SI --------
+        elif tok == 9:  # fin_si
+            cuadruplos.append((9, "", "", ""))
+            pos += 1
+            if pos < len(tokens) and tokens[pos] == 105:  # ;
+                pos += 1
+        
+        else:
+            pos += 1
+    
+    return cuadruplos, tabla_ids_lexemas, tabla_ids_indices
+
+def mostrar_cuadruplos(cuadruplos, tabla_ids_lexemas, tabla_ids_indices):
+    """Muestra la tabla de cuádruplos con tokens numéricos"""
+    print("")
+    print("=" * 70)
+    print("TABLA DE CUADRUPLOS")
+    print("=" * 70)
+    print("No   | Operador        | Operando1    | Operando2    | Resultado")
+    print("-" * 70)
+    
+    for i in range(len(cuadruplos)):
+        op, a1, a2, res = cuadruplos[i]
+        
+        # Convertir operador
+        if op == 3:
+            op_str = "3"
+        elif op == 4:
+            op_str = "4"
+        elif op == 5:
+            op_str = "5"
+        elif op == 6:
+            op_str = "6"
+        elif op == 9:
+            op_str = "9"
+        elif op == 10:
+            op_str = "10"
+        elif op == 12:
+            op_str = "12"
+        elif op == 13:
+            op_str = "13"
+        elif op == 14:
+            op_str = "14"
+        elif op == 15:
+            op_str = "15"
+        elif op == 16:
+            op_str = "16"
+        elif op == "parametro":
+            op_str = "parametro"
+        else:
+            op_str = str(op)
+        
+        a1_str = str(a1) if a1 != "" else ""
+        a2_str = str(a2) if a2 != "" else ""
+        res_str = str(res) if res != "" else ""
+        
+        # Formatear con espacios
+        num_str = str(i + 1)
+        while len(num_str) < 4:
+            num_str = num_str + " "
+        
+        while len(op_str) < 15:
+            op_str = op_str + " "
+        
+        while len(a1_str) < 12:
+            a1_str = a1_str + " "
+        
+        while len(a2_str) < 12:
+            a2_str = a2_str + " "
+        
+        while len(res_str) < 12:
+            res_str = res_str + " "
+        
+        print(num_str + " | " + op_str + " | " + a1_str + " | " + a2_str + " | " + res_str)
+    
+    print("=" * 70)
+    
+    # Mostrar tabla de identificadores
+    if len(tabla_ids_lexemas) > 0:
+        print("")
+        print("TABLA DE IDENTIFICADORES:")
+        print("-" * 40)
+        print("Identificador        | Token")
+        print("-" * 40)
+        for i in range(len(tabla_ids_lexemas)):
+            lexema = tabla_ids_lexemas[i]
+            idx = tabla_ids_indices[i]
+            
+            lex_str = lexema
+            while len(lex_str) < 20:
+                lex_str = lex_str + " "
+            
+            token_str = "[500," + str(idx) + "]"
+            
+            print(lex_str + " | " + token_str)
+        print("-" * 40)
+# ====================================
+# FUNCIÓN PRINCIPAL
+# ====================================
+def ejecutar_analisis_completo(codigo):
+    print(" COMPILADOR - ANÁLISIS COMPLETO ".center(68) )
+    
+    # FASE 1: ANÁLISIS LÉXICO
+    print("\nFASE 1: ANÁLISIS LÉXICO")
+    tokens_lista, lineas_lista, lexemas_lista = analizar(codigo)
+    
+    # Verificar si hay error léxico
+    if 900 in tokens_lista:
+        print("Error léxico detectado. Análisis detenido.\n")
+        return
+    
+    print("Análisis léxico completado exitosamente")
+    
+    # Mostrar lista de tokens como vector
+    print("\n   LISTA DE TOKENS:")
+    print(f"   {tokens_lista}")
+    
+    # FASE 2: ANÁLISIS SINTÁCTICO
+    print("\nFASE 2: ANÁLISIS SINTÁCTICO")
+    sintaxis_correcta = analizar_sintactico(tokens_lista, lineas_lista, lexemas_lista)
+    
+    if not sintaxis_correcta:
+        print("Error sintáctico detectado. Análisis detenido.\n")
+        return
+    
+    print("Análisis sintáctico completado exitosamente")
+    
+    # FASE 3: ANÁLISIS SEMÁNTICO
+    print("\nFASE 3: ANÁLISIS SEMÁNTICO")
+    # AQUÍ ESTÁ EL CAMBIO: Ahora retorna 2 valores
+    cuadruplos, tabla_ids_lexemas, tabla_ids_indices = analizar_semantico(tokens_lista, lineas_lista, lexemas_lista)
+    print("Análisis semántico completado exitosamente")
+    
+    # RESULTADOS
+    # AQUÍ ESTÁ EL CAMBIO: Ahora recibe 2 argumentos
+    mostrar_cuadruplos(cuadruplos, tabla_ids_lexemas, tabla_ids_indices)
+  
+    print("\n"+"COMPILACIÓN EXITOSA ".center(68) )
+
+
+    
 
 # ----------------------------------------------
 # CASOS DE PRUEBA
 # ----------------------------------------------
 
-# ======================================================================
-print("\nCASO 1: Identificadores válidos")
-print("\n" + "=" * 70)
-
+print("\n" + "="*70)
+print("CASO 1: MIENTRAS_QUE - Contador simple")
+print("="*70)
 codigo1 = """inicio
-entero var_1, Var_2, num;
+entero contador;
+contador = 0;
+mientras_que (contador < 5) hacer
+    imprimir(contador);
+    contador = contador + 1;
+fin_mientras_que;
+imprimir(contador);
 fin"""
+ejecutar_analisis_completo(codigo1)
 
-tokens1, lineas1, lexemas1 = analizar(codigo1)
-print("Tokens:", tokens1)
-analizar_sintactico(tokens1, lineas1, lexemas1)
-
-
-# ======================================================================
-print("\n" + "=" * 70)
-print("CASO 2: Programa válido")
-
+print("\n" + "="*70)
+print("CASO 2: REPETIR-HASTA_QUE - Acumulador")
+print("="*70)
 codigo2 = """inicio
-entero a, b, suma;
-a = 10;
-b = 20;
-suma = a + b;
-imprimir(suma);
+entero suma, i;
+suma = 0;
+i = 1;
+repetir
+    suma = suma + i;
+    i = i + 1;
+    imprimir(suma);
+hasta_que (i > 5);
 fin"""
+ejecutar_analisis_completo(codigo2)
 
-tokens2, lineas2, lexemas2 = analizar(codigo2)
-print("Tokens:", tokens2)
-analizar_sintactico(tokens2, lineas2, lexemas2)
-
-
-# ======================================================================
-print("\n" + "=" * 70)
-print("\nCASO 3: ERROR - símbolo '@'")
-
+print("\n" + "="*70)
+print("CASO 3: PARA - Con declaración interna")
+print("="*70)
 codigo3 = """inicio
-entero a;
-a = 10 @ 20;
+entero total;
+total = 0;
+para(entero i = 1; i <= 3; i = i + 1) hacer
+    total = total + i;
+    imprimir(i, total);
+fin_para;
+imprimir(total);
 fin"""
+ejecutar_analisis_completo(codigo3)
 
-tokens3, lineas3, lexemas3 = analizar(codigo3)
-print("Tokens:", tokens3)
-analizar_sintactico(tokens3, lineas3, lexemas3)
-
-
-# ======================================================================
-print("\n" + "=" * 70)
-print("\nCASO 4: Ejemplo completo con ciclo para")
-
+print("\n" + "="*70)
+print("CASO 4: PARA - Con variable externa")
+print("="*70)
 codigo4 = """inicio
-entero a;
-a = 10;
-para(entero i = 0; i < 5; i = i + 1) hacer
-    imprimir(i);
+entero j, resultado;
+j = 0;
+resultado = 100;
+para(j = 0; j < 4; j = j + 1) hacer
+    resultado = resultado - 10;
+    imprimir(j, resultado);
 fin_para;
 fin"""
-tokens4, lineas4, lexemas4 = analizar(codigo4)
-print("Tokens:", tokens4)
-analizar_sintactico(tokens4, lineas4, lexemas4)
+ejecutar_analisis_completo(codigo4)
 
-
-# ======================================================================
-print("\n" + "=" * 70)
-print("\nCASO 5: ERROR - numero con letras")
-
+print("\n" + "="*70)
+print("CASO 5: SI-ENTONCES (sin SINO)")
+print("="*70)
 codigo5 = """inicio
-entero a;
-a = 1234ee33;
+entero edad, mayor;
+edad = 20;
+mayor = 0;
+si (edad >= 18) entonces
+    mayor = 1;
+    imprimir(mayor);
+fin_si;
+imprimir(edad);
 fin"""
-print(analizar(codigo5))
+ejecutar_analisis_completo(codigo5)
 
-tokens5, lineas5, lexemas5 = analizar(codigo5)
-print("Tokens:", tokens5)
-analizar_sintactico(tokens5, lineas5, lexemas5)
-
-
-# ======================================================================
-print("\n" + "=" * 70)
-print("\nCASO 6: Condición SI")
-
+print("\n" + "="*70)
+print("CASO 6: SI-ENTONCES-SINO completo")
+print("="*70)
 codigo6 = """inicio
-entero a;
-a = 15;
-si a > 10 entonces
-    imprimir(a);
-fin_si
+entero numero, positivo;
+numero = -5;
+si (numero > 0) entonces
+    positivo = 1;
+    imprimir(positivo);
+sino
+    positivo = 0;
+    imprimir(positivo);
+fin_si;
 fin"""
+ejecutar_analisis_completo(codigo6)
 
-tokens6, lineas6, lexemas6 = analizar(codigo6)
-print("Tokens:", tokens6)
-analizar_sintactico(tokens6, lineas6, lexemas6)
-
-
-# ======================================================================
-print("\n" + "=" * 70)
-print("\nCASO 7: Ciclo MIENTRAS")
-
+print("\n" + "="*70)
+print("CASO 7: PROGRAMA LARGO - Factorial")
+print("="*70)
 codigo7 = """inicio
-entero i;
-i = 0;
-mientras_que i < 5 hacer
-    imprimir(i);
-    i = i + 1;
-fin_mientras_que
+entero n, factorial, i;
+n = 5;
+factorial = 1;
+i = 1;
+si (n > 0) entonces
+    mientras_que (i <= n) hacer
+        factorial = factorial * i;
+        imprimir(i, factorial);
+        i = i + 1;
+    fin_mientras_que;
+sino
+    factorial = 0;
+fin_si;
+imprimir(factorial);
 fin"""
+ejecutar_analisis_completo(codigo7)
 
-tokens7, lineas7, lexemas7 = analizar(codigo7)
-print("Tokens:", tokens7)
-analizar_sintactico(tokens7, lineas7, lexemas7)
-
-
-# ======================================================================
-print("\n" + "=" * 70)
-print("\nCASO 8: Ciclo REPETIR")
-
+print("\n" + "="*70)
+print("CASO 8: PROGRAMA LARGO - Suma pares e impares")
+print("="*70)
 codigo8 = """inicio
-entero x;
-x = 1;
-repetir
-    imprimir(x);
-    x = x + 1;
-hasta_que x == 5;
+entero limite, suma_pares, suma_impares, resto;
+limite = 10;
+suma_pares = 0;
+suma_impares = 0;
+para(entero num = 1; num <= limite; num = num + 1) hacer
+    resto = num - num / 2 * 2;
+    si (resto == 0) entonces
+        suma_pares = suma_pares + num;
+        imprimir(num, suma_pares);
+    sino
+        suma_impares = suma_impares + num;
+        imprimir(num, suma_impares);
+    fin_si;
+fin_para;
+imprimir(suma_pares, suma_impares);
 fin"""
+ejecutar_analisis_completo(codigo8)
 
-tokens8, lineas8, lexemas8 = analizar(codigo8)
-print("Tokens:", tokens8)
-analizar_sintactico(tokens8, lineas8, lexemas8)
-
-
-# ======================================================================
-print("\n" + "=" * 70)
-print("\nCASO 9: Operadores relacionales")
-
+print("\n" + "="*70)
+print("CASO 9: PROGRAMA LARGO - Búsqueda y validación")
+print("="*70)
 codigo9 = """inicio
-entero a, b;
-a = 10;
-b = 20;
-si a != b entonces
-    imprimir(a);
-fin_si
-si a <= b entonces
-    imprimir(b);
-fin_si
-si b >= a entonces
-    imprimir(a);
-fin_si
+entero buscar, encontrado, actual, intentos, max_intentos;
+buscar = 7;
+encontrado = 0;
+actual = 1;
+intentos = 0;
+max_intentos = 10;
+repetir
+    si (actual == buscar) entonces
+        encontrado = 1;
+        imprimir(actual, encontrado);
+    sino
+        actual = actual + 1;
+        intentos = intentos + 1;
+    fin_si;
+hasta_que (encontrado == 1 o intentos >= max_intentos);
+si (encontrado == 1) entonces
+    imprimir(actual);
+sino
+    imprimir(intentos);
+fin_si;
 fin"""
+ejecutar_analisis_completo(codigo9)
 
-tokens9, lineas9, lexemas9 = analizar(codigo9)
-print("Tokens:", tokens9)
-analizar_sintactico(tokens9, lineas9, lexemas9)
-
-
-# ======================================================================
-print("\n" + "=" * 70)
-print("\nCASO 10: ERROR - carácter '$'")
-
+print("\n" + "="*70)
+print("CASO 10: PROGRAMA LARGO - Sistema de calificaciones")
+print("="*70)
 codigo10 = """inicio
-entero total;
-total = 50 $ 10;
+entero nota1, nota2, nota3, promedio, aprobado, total;
+ingresa(nota1);
+ingresa(nota2);
+ingresa(nota3);
+total = nota1 + nota2 + nota3;
+promedio = total / 3;
+aprobado = 0;
+si (promedio >= 60) entonces
+    aprobado = 1;
+    imprimir(promedio, aprobado);
+    si (promedio >= 90) entonces
+        imprimir(1);
+    sino
+        si (promedio >= 70) entonces
+            imprimir(2);
+        sino
+            imprimir(3);
+        fin_si;
+    fin_si;
+sino
+    imprimir(promedio, aprobado);
+fin_si;
 fin"""
-print(analizar(codigo10))
+ejecutar_analisis_completo(codigo10)
 
-tokens10, lineas10, lexemas10 = analizar(codigo10)
-print("Tokens:", tokens10)
-analizar_sintactico(tokens10, lineas10, lexemas10)
+print("\n" + "="*70)
+print("CASO 11: Condiciones con operadores lógicos AND")
+print("="*70)
+codigo11 = """inicio
+entero a, b, resultado;
+a = 5;
+b = 10;
+resultado = 0;
+si (a > 0 y b > 0) entonces
+    resultado = a + b;
+    imprimir(resultado);
+fin_si;
+fin"""
+ejecutar_analisis_completo(codigo11)
+
+print("\n" + "="*70)
+print("CASO 12: Condiciones con operadores lógicos OR")
+print("="*70)
+codigo12 = """inicio
+entero x, y, valido;
+x = -5;
+y = 15;
+valido = 0;
+si (x > 0 o y > 0) entonces
+    valido = 1;
+    imprimir(valido);
+sino
+    imprimir(valido);
+fin_si;
+fin"""
+ejecutar_analisis_completo(codigo12)
+
+print("\n" + "="*70)
+print("CASO 13: MIENTRAS con condiciones múltiples")
+print("="*70)
+codigo13 = """inicio
+entero a, b;
+a = 1;
+b = 10;
+mientras_que (a < 5 y b > 5) hacer
+    imprimir(a, b);
+    a = a + 1;
+    b = b - 1;
+fin_mientras_que;
+fin"""
+ejecutar_analisis_completo(codigo13)
+
+print("\n" + "="*70)
+print("CASO 14: Expresiones aritméticas complejas")
+print("="*70)
+codigo14 = """inicio
+entero a, b, c, d, resultado;
+a = 10;
+b = 5;
+c = 3;
+d = 2;
+resultado = a + b * c - d / 2 + (a - b) * c;
+imprimir(resultado);
+fin"""
+ejecutar_analisis_completo(codigo14)
+
+print("\n" + "="*70)
+print("CASO 15: Operador NOT en condiciones")
+print("="*70)
+codigo15 = """inicio
+entero activo, resultado;
+activo = 0;
+resultado = 0;
+si (no activo == 1) entonces
+    resultado = 1;
+    imprimir(resultado);
+sino
+    resultado = 0;
+    imprimir(resultado);
+fin_si;
+fin"""
+ejecutar_analisis_completo(codigo15)
